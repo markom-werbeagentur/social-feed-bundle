@@ -113,16 +113,16 @@ class LinkedIn
                 }
                 */
 
-                // $client->setApiRoot('https://api.linkedin.com/rest/');
+                $client->setApiRoot('https://api.linkedin.com/rest/');
                 $client->setApiHeaders([
                     'Content-Type' => 'application/json',
                     'X-Restli-Protocol-Version' => '2.0.0', // use protocol v2,
-                    'LinkedIn-Version' => '202306',
+                    'LinkedIn-Version' => '202604',
                 ]);
 
                 // get posts
                 $posts = $client->get(
-                    'ugcPosts?q=authors&authors=List(urn%3Ali%3Aorganization%3A'.$account->linkedin_company_id.')&sortBy=LAST_MODIFIED&count='.$this->maxPosts
+                    'posts?q=author&author=List(urn%3Ali%3Aorganization%3A'.$account->linkedin_company_id.')&sortBy=LAST_MODIFIED&count='.$this->maxPosts
                 );
 
                 if (!\is_array($posts['elements'])) {
