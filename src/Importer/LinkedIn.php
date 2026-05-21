@@ -122,7 +122,7 @@ class LinkedIn
 
                 // get posts
                 $posts = $client->get(
-                    'posts?q=author&author=List(urn%3Ali%3Aorganization%3A'.$account->linkedin_company_id.')&sortBy=LAST_MODIFIED&count='.$this->maxPosts
+                    'posts?q=author&author='.urlencode('urn:li:organization:' . $account->linkedin_company_id).'&sortBy=LAST_MODIFIED&count='.$this->maxPosts
                 );
 
                 if (!\is_array($posts['elements'])) {
@@ -130,6 +130,18 @@ class LinkedIn
                 }
 
                 foreach ($posts['elements'] as $element) {
+                    /** 
+                     * Skip non-public items
+                     * There is also the property:
+                     * "lifecycleState" => "PUBLISHED"
+                     * Dont know what exactly that is, maybe it should be adjusted
+                     */
+                    if ($element['visibility'] !== 'PUBLIC') {
+                        continue;
+                    }
+
+                    
+
                     $objFile = null;
 
                     if ($this->debug) {
@@ -149,26 +161,21 @@ class LinkedIn
 
                     $item = [];
 
-                    // get post image
-                    $media = $element['specificContent']['com.linkedin.ugc.ShareContent']['media'];
+                    // Single media
+                    $media = $element['content']['media'] ?? [];
 
-                    if (!empty($media) && \is_array($media)) {
+                    if (!empty($media) && \is_array($media) && strpos($media['id'], 'urn:li:image') === 0) {
                         $imgPath = NewsImporter::createImageFolder($account->linkedin_company_id);
                         $picturePath = $imgPath.str_replace('urn:li:share:', '', $element['id']).'.jpg';
 
-                        // use originalUrl of media for image download
-                        $firstImage = $media[0]['originalUrl'] ?? null;
+                        $image = $client->get('images/' . urlencode($media['id']));
+                        $url = $image['downloadUrl'] ?? null;
 
-                        // use first thumbnail for articles
-                        if (isset($media[0]) && str_contains($media[0]['media'], 'urn:li:article:') && isset($media[0]['thumbnails'][0])) {
-                            $firstImage = $media[0]['thumbnails'][0]['url'] ?? null;
-                        }
-
-                        // get first image
-                        if (!file_exists($picturePath) && isset($firstImage)) {
+                        // // get first image
+                        if (!file_exists($picturePath) && isset($url)) {
                             // Write to filesystem
                             $file = new File($picturePath);
-                            $file->write(file_get_contents($firstImage));
+                            $file->write(file_get_contents($url));
                             $file->close();
 
                             // Add the resource
@@ -181,12 +188,20 @@ class LinkedIn
                         }
                     }
 
+                    $elementText = $this->parseLinkedInStrings($element['commentary'] ?? '');
+                    $elementText = $this->formatLinkedInMentions($elementText);
+                    $elementText = $this->formatLinkedInText($elementText);
+
+                    if (!trim(strip_tags($elementText))) {
+                        continue;
+                    }
+
                     $item['id'] = $element['id'];
-                    $item['headline'] = NewsImporter::shortenHeadline($element['specificContent']['com.linkedin.ugc.ShareContent']['shareCommentary']['text'] ?? '');
-                    $item['teaser'] = str_replace("\n", '<br>', $element['specificContent']['com.linkedin.ugc.ShareContent']['shareCommentary']['text'] ?? '');
+                    $item['headline'] = NewsImporter::shortenHeadline($elementText);
+                    $item['teaser'] = str_replace("\n", '<br>', $elementText);
                     $item['singleSRC'] = null !== $objFile ? $objFile->uuid : '';
-                    $item['date'] = $element['firstPublishedAt'] / 1000;
-                    $item['time'] = $element['firstPublishedAt'] / 1000;
+                    $item['date'] = $element['publishedAt'] / 1000;
+                    $item['time'] = $element['publishedAt'] / 1000;
                     $item['permalink'] = 'https://www.linkedin.com/feed/update/'.$item['id'].'/';
 
                     // @todo get organization and set account picture
@@ -242,5 +257,61 @@ class LinkedIn
     public function setMaxPosts($maxPosts): void
     {
         $this->maxPosts = $maxPosts;
+    }
+
+    // @todo everything below basicly copy pasted from the AI with little modification, This is not fully tested.
+    protected function parseLinkedInStrings(string $text): string
+    {
+        $text = preg_replace_callback(
+            '/\{(\w+)\|([^|]*)\|([^}]*)\}/',
+            function (array $matches): string {
+                $type    = $matches[1]; // hashtag, mention, etc.
+                $display = $matches[2]; // \#, \@
+                $value   = $matches[3];
+
+                $icon = '';
+
+                switch ($type) {
+                    case 'hashtag':
+                        $icon = '#';
+                        break;
+                    case 'mention':
+                        $icon = '@';
+                        break;
+                }
+
+                return $icon . $value;
+            },
+            $text
+        );
+
+        // Remove escape characters
+        $decoded = json_decode('"' . $text . '"', true);
+
+        return $decoded ?? $text;
+    }
+
+    protected function formatLinkedInMentions(string $text): string
+    {
+        // @[Name](urn:li:organization:123) and @[Name](urn:li:person:123)
+        $text = preg_replace(
+            '/@\[([^\]]+)\]\(urn:li:(?:organization|person):.+\)/',
+            '$1',
+            $text
+        );
+
+        return $text;
+    }
+
+    protected function formatLinkedInText(string $text): string
+    {
+        $text = preg_replace('/\\\\(?!["\\\\\\/bfnrtu])/', '', $text);
+        $wrapped = '"' . str_replace('"', '\\"', $text) . '"';
+        $decoded = json_decode($wrapped, true);
+        if ($decoded !== null) {
+            $text = $decoded;
+        }
+
+        return $text;
     }
 }
