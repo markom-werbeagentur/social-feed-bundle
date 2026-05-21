@@ -164,15 +164,27 @@ class LinkedIn
                     // Single media
                     $media = $element['content']['media'] ?? [];
 
-                    if (!empty($media) && \is_array($media) && strpos($media['id'], 'urn:li:image') === 0) {
-                        $imgPath = NewsImporter::createImageFolder($account->linkedin_company_id);
-                        $picturePath = $imgPath.str_replace('urn:li:share:', '', $element['id']).'.jpg';
+                    if (!empty($media) && \is_array($media) && preg_match('/urn:li:[image|video]/', $media['id'])) {
+                        $type = '';
+                        if (preg_match('/^urn:li:([^:]+):/', $media['id'], $matches)) {
+                            $type = $matches[1];
+                        }
 
-                        $image = $client->get('images/' . urlencode($media['id']));
-                        $url = $image['downloadUrl'] ?? null;
+                        $imgPath = NewsImporter::createImageFolder($account->linkedin_company_id);
+                        $picturePath = $imgPath.preg_replace('/urn:li:[image|video|ugcPost]:/', '', $element['id']).'.jpg';
+
+                        $url = '';
+
+                        if ($type === 'image') {
+                            $image = $client->get('images/' . urlencode($media['id']));
+                            $url = $image['downloadUrl'] ?? null;
+                        } elseif ($type === 'video') {
+                            $video = $client->get('videos/' . urlencode($media['id']));
+                            $url = $video['thumbnail'] ?? null;
+                        }
 
                         // // get first image
-                        if (!file_exists($picturePath) && isset($url)) {
+                        if (!file_exists($picturePath) && $url) {
                             // Write to filesystem
                             $file = new File($picturePath);
                             $file->write(file_get_contents($url));
